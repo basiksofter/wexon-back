@@ -14,6 +14,8 @@ const UserSchema = new mongoose.Schema({
   username: String,
   email: String,
   password: String,
+  hwid: { type: String, default: "" },
+  uid: { type: Number, required: true },
   registrationDate: Date,
   lastLogin: Date,
   status: String,
@@ -24,42 +26,102 @@ const User = mongoose.model('User', UserSchema);
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
 app.post('/register', async (req, res) => {
-  const { username, email, password } = req.body;
-  if (await User.findOne({ username })) return res.status(400).json({ error: 'Username exists' });
-  if (await User.findOne({ email })) return res.status(400).json({ error: 'Email exists' });
+  const { username, email, password, hwid = "" } = req.body;
+  
+  if (await User.findOne({ username })) {
+    return res.status(400).json({ error: 'Username exists' });
+  }
+  if (await User.findOne({ email })) {
+    return res.status(400).json({ error: 'Email exists' });
+  }
+  
+  // Находим максимальный UID
+  const maxUser = await User.findOne().sort({ uid: -1 });
+  const newUid = maxUser ? maxUser.uid + 1 : 1;
+  
   const hash = await bcrypt.hash(password, 10);
   const user = await User.create({
-    username, email, password: hash,
+    username, 
+    email, 
+    password: hash,
+    hwid,
+    uid: newUid,
     registrationDate: new Date(),
     lastLogin: new Date(),
     status: 'active',
     accountType: 'basic'
   });
-  res.json({ id: user._id, username: user.username, email: user.email });
+  
+  res.json({ 
+    id: user._id, 
+    username: user.username, 
+    email: user.email,
+    uid: user.uid,
+    hwid: user.hwid,
+    accountType: user.accountType,
+    registrationDate: user.registrationDate,
+    lastLogin: user.lastLogin
+  });
 });
 
 app.post('/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, hwid } = req.body;
   const user = await User.findOne({ username });
-  if (!user) return res.status(400).json({ error: 'User not found' });
-  if (!(await bcrypt.compare(password, user.password))) return res.status(400).json({ error: 'Wrong password' });
+  
+  if (!user) {
+    return res.status(400).json({ error: 'User not found' });
+  }
+  if (!(await bcrypt.compare(password, user.password))) {
+    return res.status(400).json({ error: 'Wrong password' });
+  }
+  
+  // Обновляем HWID если передан
+  if (hwid && hwid !== user.hwid) {
+    user.hwid = hwid;
+  }
+  
   user.lastLogin = new Date();
   await user.save();
+  
   const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ token, user: { id: user._id, username: user.username, email: user.email } });
+  res.json({ 
+    token, 
+    user: { 
+      id: user._id, 
+      username: user.username, 
+      email: user.email,
+      uid: user.uid,
+      hwid: user.hwid,
+      accountType: user.accountType,
+      registrationDate: user.registrationDate,
+      lastLogin: user.lastLogin
+    } 
+  });
 });
 
 app.get('/me', async (req, res) => {
   const auth = req.headers.authorization;
   if (!auth) return res.status(401).json({ error: 'No token' });
+  
   try {
     const { id } = jwt.verify(auth.split(' ')[1], JWT_SECRET);
     const user = await User.findById(id);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ id: user._id, username: user.username, email: user.email });
+    
+    res.json({ 
+      id: user._id, 
+      username: user.username, 
+      email: user.email,
+      uid: user.uid,
+      hwid: user.hwid,
+      accountType: user.accountType,
+      registrationDate: user.registrationDate,
+      lastLogin: user.lastLogin,
+      status: user.status
+    });
   } catch {
     res.status(401).json({ error: 'Invalid token' });
   }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log('Server started'));
+app.listen(process.env.PORT || 3000, () => console.log('Server started')); 
