@@ -162,6 +162,49 @@ app.get('/me', async (req, res) => {
   }
 });
 
+// Endpoint для проверки HWID
+app.post('/check-hwid', async (req, res) => {
+  try {
+    const { username, hwid } = req.body;
+    
+    if (!username || !hwid) {
+      return res.status(400).json({ error: 'Username and HWID are required' });
+    }
+    
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Если у пользователя нет HWID, разрешаем привязку
+    if (!user.hwid || user.hwid === "") {
+      return res.json({ 
+        canBind: true, 
+        message: 'HWID can be bound to this account',
+        currentHwid: user.hwid || ""
+      });
+    }
+    
+    // Если HWID уже привязан, проверяем соответствие
+    if (user.hwid === hwid) {
+      return res.json({ 
+        canBind: true, 
+        message: 'HWID matches',
+        currentHwid: user.hwid
+      });
+    } else {
+      return res.status(403).json({ 
+        canBind: false, 
+        error: 'Account is bound to another computer',
+        currentHwid: user.hwid
+      });
+    }
+  } catch (error) {
+    console.error('HWID check error:', error);
+    res.status(500).json({ error: 'Internal server error during HWID check' });
+  }
+});
+
 // Middleware для логирования запросов
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
