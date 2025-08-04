@@ -5,8 +5,16 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 
 const app = express();
+
+// Настройка CORS для разрешения запросов с любых доменов
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    credentials: true
+}));
+
 app.use(express.json());
-app.use(cors());
 
 mongoose.connect(process.env.MONGO_URL);
 
@@ -15,7 +23,16 @@ const UserSchema = new mongoose.Schema({
   email: String,
   password: String,
   hwid: { type: String, default: "" },
-  uid: { type: Number, required: true },
+  uid: { 
+    type: Number, 
+    required: true,
+    validate: {
+      validator: function(v) {
+        return typeof v === 'number' && !isNaN(v) && v > 0;
+      },
+      message: 'UID must be a positive number'
+    }
+  },
   registrationDate: Date,
   lastLogin: Date,
   status: String,
@@ -26,42 +43,63 @@ const User = mongoose.model('User', UserSchema);
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
 app.post('/register', async (req, res) => {
-  const { username, email, password, hwid = "" } = req.body;
-  
-  if (await User.findOne({ username })) {
-    return res.status(400).json({ error: 'Username exists' });
+  try {
+    const { username, email, password, hwid = "" } = req.body;
+    
+    if (await User.findOne({ username })) {
+      return res.status(400).json({ error: 'Username exists' });
+    }
+    if (await User.findOne({ email })) {
+      return res.status(400).json({ error: 'Email exists' });
+    }
+    
+    // Находим максимальный UID с правильной обработкой ошибок
+    let newUid = 1;
+    try {
+      const maxUser = await User.findOne().sort({ uid: -1 });
+      console.log('Max user found:', maxUser ? { uid: maxUser.uid, username: maxUser.username } : 'No users found');
+      
+      if (maxUser && maxUser.uid && !isNaN(maxUser.uid)) {
+        newUid = maxUser.uid + 1;
+        console.log('Calculated new UID:', newUid);
+      } else {
+        console.log('Using default UID:', newUid);
+      }
+    } catch (error) {
+      console.error('Error finding max UID:', error);
+      newUid = 1; // Fallback к 1 если что-то пошло не так
+    }
+    
+    const hash = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      username, 
+      email, 
+      password: hash,
+      hwid,
+      uid: newUid,
+      registrationDate: new Date(),
+      lastLogin: new Date(),
+      status: 'active',
+      accountType: 'basic'
+    });
+    
+    res.json({ 
+      id: user._id, 
+      username: user.username, 
+      email: user.email,
+      uid: user.uid,
+      hwid: user.hwid,
+      accountType: user.accountType,
+      registrationDate: user.registrationDate,
+      lastLogin: user.lastLogin
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: 'Validation error: ' + error.message });
+    }
+    res.status(500).json({ error: 'Internal server error during registration' });
   }
-  if (await User.findOne({ email })) {
-    return res.status(400).json({ error: 'Email exists' });
-  }
-  
-  // Находим максимальный UID
-  const maxUser = await User.findOne().sort({ uid: -1 });
-  const newUid = maxUser ? maxUser.uid + 1 : 1;
-  
-  const hash = await bcrypt.hash(password, 10);
-  const user = await User.create({
-    username, 
-    email, 
-    password: hash,
-    hwid,
-    uid: newUid,
-    registrationDate: new Date(),
-    lastLogin: new Date(),
-    status: 'active',
-    accountType: 'basic'
-  });
-  
-  res.json({ 
-    id: user._id, 
-    username: user.username, 
-    email: user.email,
-    uid: user.uid,
-    hwid: user.hwid,
-    accountType: user.accountType,
-    registrationDate: user.registrationDate,
-    lastLogin: user.lastLogin
-  });
 });
 
 app.post('/login', async (req, res) => {
@@ -124,4 +162,24 @@ app.get('/me', async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log('Server started')); 
+// Middleware для логирования запросов
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+});
+
+// Обработчик ошибок
+app.use((err, req, res, next) => {
+    console.error('Error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+});
+
+// Обработчик 404
+app.use((req, res) => {
+    res.status(404).json({ error: 'Route not found' });
+});
+
+app.listen(process.env.PORT || 3000, () => {
+    console.log('Server started on port', process.env.PORT || 3000);
+    console.log('MongoDB URL:', process.env.MONGO_URL ? 'Configured' : 'Not configured');
+}); 
